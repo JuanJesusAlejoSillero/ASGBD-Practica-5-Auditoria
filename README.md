@@ -19,8 +19,10 @@
     - [**Ejercicio 8.1**](#ejercicio-81)
     - [**Ejercicio 8.3**](#ejercicio-83)
     - [**Ejercicio 8.4**](#ejercicio-84)
+  - [**Preparación del escenario en la VM para MongoDB**](#preparación-del-escenario-en-la-vm-para-mongodb)
   - [**Ejercicio 9**](#ejercicio-9)
   - [**Ejercicio 10**](#ejercicio-10)
+  - [**Extra**](#extra)
 
 ---
 
@@ -823,17 +825,330 @@ SELECT * FROM AUDIT_EMP;
 
 ![49](img/49.png)
 
+## **Preparación del escenario en la VM para MongoDB**
+
+Para auditar en MongoDB tendremos que usar la versión MongoDB Enterprise. Para instalarla, seguimos la [documentación oficial de MongoDB](https://www.mongodb.com/docs/manual/tutorial/install-mongodb-enterprise-on-debian/).
+
+El resumen de los pasos a seguir es:
+
+1. Agregar la clave pública de MongoDB a la lista de claves de confianza:
+
+```bash
+su -
+
+wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | sudo apt-key add -
+```
+
+2. Crear un fichero de lista de repositorios para MongoDB:
+
+```bash
+echo "deb http://repo.mongodb.com/apt/debian bullseye/mongodb-enterprise/6.0 main" | sudo tee /etc/apt/sources.list.d/mongodb-enterprise.list
+```
+
+3. Actualizar el índice de paquetes:
+
+```bash
+apt update
+```
+
+4. Instalar MongoDB Enterprise:
+
+```bash
+apt install mongodb-enterprise -y
+```
+
+5. Iniciar (y habilitar) el servicio:
+
+```bash
+systemctl enable --now mongod
+```
+
+6. Comprobar que se ha instalado correctamente:
+
+```bash
+exit
+
+mongod --version
+```
+
+![50](img/50.png)
+
 ## **Ejercicio 9**
 
 > **9. Averigua las posibilidades que ofrece MongoDB para auditar los cambios que va sufriendo un documento. Demuestra su funcionamiento.**
 
+Teniendo la edición Enterprise, ya podemos auditar los cambios que va sufriendo un documento. [Según la documentación oficial](https://www.mongodb.com/docs/manual/tutorial/configure-auditing/) disponemos de 4 formas de obtener los eventos de auditoría mediante comandos de terminal:
 
+- **Por consola:**
+
+  ```bash
+  mongod --dbpath data/db --auditDestination console
+  ```
+
+- **Por syslog:** Esta opción no está disponible en Windows.
+
+  ```bash
+  mongod --dbpath data/db --auditDestination syslog
+  ```
+
+- **Por fichero JSON:**
+
+  ```bash
+  mongod --dbpath data/db --auditDestination file --auditFormat JSON --auditPath data/db/auditLog.json
+  ```
+
+- **Por fichero BSON:**
+
+  ```bash
+  mongod --dbpath data/db --auditDestination file --auditFormat BSON --auditPath data/db/auditLog.bson
+  ```
+
+Alternativamente, podemos configurar la auditoría en el fichero de configuración de MongoDB (`/etc/mongod.conf`) y reiniciar el servicio:
+
+- **Por consola:**
+
+  ```conf
+  auditLog:
+     destination: console
+  ```
+
+  ![51](img/51.png)
+
+- **Por syslog:** Esta opción no está disponible en Windows.
+
+  ```conf
+  auditLog:
+     destination: syslog
+  ```
+
+  ![52](img/52.png)
+
+- **Por fichero JSON:**
+
+  ```conf
+  auditLog:
+     destination: file
+     format: JSON
+     path: data/db/auditLog.json
+  ```
+
+  ![53](img/53.png)
+
+- **Por fichero BSON:**
+
+  ```conf
+  auditLog:
+     destination: file
+     format: BSON
+     path: data/db/auditLog.bson
+  ```
+
+  ![54](img/54.png)
+
+Sabiendo esto, he decidido realizar la auditoría en formato JSON habilitándola mediante el fichero de configuración:
+
+```bash
+sudo nano /etc/mongod.conf
+```
+
+```conf
+auditLog:
+   destination: file
+   format: JSON
+   path: /var/log/mongodb/auditLog.json
+```
+
+![55](img/55.png)
+
+Antes de continuar, nos convendrá instalar *jq*, un procesador de JSON para la línea de comandos:
+
+```bash
+apt install -y jq
+```
+
+![56](img/56.png)
+
+Procedo a entrar en *mongosh* y realizar algunos cambios en la base de datos que ya tenía creada:
+
+```bash
+mongosh -u juanje -p juanje --authenticationDatabase proyecto_bd
+```
+
+```js
+use proyecto_bd
+
+db.pacientes.insertOne({codigo_paciente: 'PQRS7890', nombre: 'Luis', apellidos: 'Martínez', dni: '55555555E', fecha_nacimiento: new Date('1980-03-02'), sexo: 'H', telefono: '611111111', direccion: 'C/Antonio, 1, Madrid'})
+
+db.pacientes.updateOne({codigo_paciente: 'PQRS7890'}, {$set: {nombre: 'Manolo'}})
+
+db.pacientes.deleteOne({codigo_paciente: 'PQRS7890'})
+```
+
+![58](img/57.png)
+
+Si ahora miro el contenido del fichero de auditoría, veré que ya tiene información, pero no refleja los cambios que he realizado en la base de datos:
+
+```bash
+sudo cat /var/log/mongodb/auditLog.json | jq
+```
+
+![58](img/58.png)
+
+**La salida es enorme, pero no aparecen los cambios hechos.**
+
+**Para que se registren las operaciones [*WRITE*](https://www.mongodb.com/docs/manual/reference/log-messages/#mongodb-data-WRITE), tendremos que editar el fichero de configuración de MongoDB y añadir lo siguiente:**
+
+```bash
+sudo nano /etc/mongod.conf
+```
+
+```conf
+systemLog:
+   destination: file
+   logAppend: true
+   path: /var/log/mongodb/mongod.log
+   component:
+     write:
+       verbosity: 2
+```
+
+![59](img/59.png)
+
+Tras reiniciar el servicio, ya se registrarán las operaciones de escritura, pero las ejecutaré de nuevo ya que las anteriores obviamente ya no se van a registrar:
+
+```bash
+sudo systemctl restart mongod
+
+mongosh -u juanje -p juanje --authenticationDatabase proyecto_bd
+```
+
+```js
+use proyecto_bd
+
+db.pacientes.insertOne({codigo_paciente: 'PQRS7890', nombre: 'Luis', apellidos: 'Martínez', dni: '55555555E', fecha_nacimiento: new Date('1980-03-02'), sexo: 'H', telefono: '611111111', direccion: 'C/Antonio, 1, Madrid'})
+
+db.pacientes.updateOne({codigo_paciente: 'PQRS7890'}, {$set: {nombre: 'Manolo'}})
+
+db.pacientes.deleteOne({codigo_paciente: 'PQRS7890'})
+```
+
+![60](img/60.png)
+
+Ahora sí que se han registrado los cambios, usaré un filtro de *jq* para ver solo los que afectan a la colección *pacientes*:
+
+```bash
+sudo jq '. | select(.attr.ns == "proyecto_bd.pacientes")' /var/log/mongodb/mongod.log
+```
+
+Update del documento:
+
+![61](img/61.png)
+
+Delete del documento:
+
+![62](img/62.png)
+
+> **En resumen:** para auditar los **cambios** que va sufriendo un documento, tendremos que editar el fichero de configuración de MongoDB poniendo el nivel de verbosidad de las operaciones de escritura a 2 y reiniciar el servicio. Tras esto, ya se registrarán los **cambios** que se realicen en los documentos.
 
 ## **Ejercicio 10**
 
 > **10. Averigua si en MongoDB se pueden auditar los accesos a una colección concreta. Demuestra su funcionamiento.**
 
+Para auditar los accesos a una colección concreta usaré un filtro de auditoría [(*auditFilter*)](https://www.mongodb.com/docs/manual/tutorial/configure-audit-filters/):
 
+```bash
+sudo nano -cl /etc/mongod.conf
+```
+
+```conf
+auditLog:
+   destination: file
+   format: JSON
+   path: /var/log/mongodb/auditLog2.json
+   filter: '{ atype: "authCheck", "param.ns": "proyecto_bd.doctores", "param.command": { $in: [ "find", "insert", "delete", "update", "findandmodify" ] } }'
+
+setParameter: { auditAuthorizationSuccess: true }
+```
+
+![63](img/63.png)
+
+Reinicio el servicio y ejecuto algunas operaciones sobre la colección *doctores*:
+
+```bash
+sudo systemctl restart mongod
+
+mongosh -u juanje -p juanje --authenticationDatabase proyecto_bd
+```
+
+```js
+use proyecto_bd
+
+db.doctores.insertOne({codigo_doctor: 'PQRS7890', nombre: 'Luis', apellidos: 'Martínez', dni: '55555555E', fecha_nacimiento: new Date('1980-03-02'), sexo: 'H', telefono: '611111111', direccion: 'C/Antonio, 1, Madrid'})
+
+db.doctores.updateOne({codigo_doctor: 'PQRS7890'}, {$set: {nombre: 'Manolo'}})
+
+db.doctores.deleteOne({codigo_doctor: 'PQRS7890'})
+
+db.doctores.find()
+```
+
+![64](img/64.png)
+
+```js
+db.pacientes.insertOne({codigo_paciente: 'PQRS7890', nombre: 'Flor', apellidos: 'Gala', dni: '3513623G', fecha_nacimiento: new Date('1980-03-02'), sexo: 'M', telefono: '672409832', direccion: 'C/Lidia, 1, Madrid'})
+
+db.pacientes.updateOne({codigo_paciente: 'PQRS7890'}, {$set: {nombre: 'Manoli'}})
+
+db.pacientes.deleteOne({codigo_paciente: 'PQRS7890'})
+
+db.pacientes.find()
+```
+
+![65](img/65.png)
+
+Ahora, si miro el contenido del fichero de auditoría, veré que solo se han registrado las operaciones que he realizado sobre la colección *doctores*. Si quiero filtrar por operaciones de *insert*, por ejemplo, usaré el siguiente comando:
+
+```bash
+sudo jq '. | select(.param.command == "insert")' /var/log/mongodb/auditLog2.json
+```
+
+![66](img/66.png)
+
+Y podemos ver que únicamente aparece el *insert* que he realizado sobre la colección *doctores* y no el realizado sobre la colección *pacientes*.
+
+También podemos filtrar y obtener el *update* y el *delete* que he realizado sobre la colección *doctores*:
+
+```bash
+sudo jq '. | select(.param.command == "update" or .param.command == "delete")' /var/log/mongodb/auditLog2.json
+```
+
+Lo muestro en dos terminales, lado a lado para que se puedan observar ambas operaciones al mismo tiempo. A la izquierda, el *update* y a la derecha, el *delete*:
+
+![67](img/67.png)
+
+Y si busco en todo el archivo alguna operación de *find*:
+
+```bash
+sudo jq '. | select(.param.command == "find")' /var/log/mongodb/auditLog2.json
+```
+
+![68](img/68.png)
+
+Finalmente, si busco en todo el archivo, veré que no aparece la palabra *pacientes*, esto demuestra que la auditoría se hace de forma única sobre la colección *doctores* y las operaciones que realicé en la colección *pacientes* no se registraron:
+
+```bash
+sudo grep pacientes /var/log/mongodb/auditLog2.json
+
+sudo grep doctores /var/log/mongodb/auditLog2.json
+```
+
+![69](img/69.png)
+
+---
+
+## **Extra**
+
+Para hacer pruebas con *jq*, podemos usar la web [jqplay.org](https://jqplay.org/). Muy útil para probar los filtros que queramos aplicar.
 
 ---
 
