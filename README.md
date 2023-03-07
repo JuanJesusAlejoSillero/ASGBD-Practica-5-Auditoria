@@ -23,6 +23,9 @@
   - [**Ejercicio 9**](#ejercicio-9)
   - [**Ejercicio 10**](#ejercicio-10)
   - [**Extra**](#extra)
+- [**ASGBD - Examen**](#asgbd---examen)
+  - [**Práctica 7: Auditoría**](#práctica-7-auditoría)
+    - [**Opción 2**](#opción-2)
 
 ---
 
@@ -1153,3 +1156,86 @@ Para hacer pruebas con *jq*, podemos usar la web [jqplay.org](https://jqplay.org
 ---
 
 ✒️ **Documentación realizada por Juan Jesús Alejo Sillero.**
+
+---
+
+# **ASGBD - Examen**
+
+## **Práctica 7: Auditoría**
+
+### **Opción 2**
+
+**Crea una colección en MongoDB y audita exclusivamente las eliminaciones de documentos que se produzcan en la misma. Demuestra su funcionamiento.**
+
+Entro en la VM con MongoDB Enterprise, creo una colección nueva en la base de datos *proyecto_bd* e inserto varios documentos:
+
+```bash
+mongosh -u juanje -p juanje --authenticationDatabase proyecto_bd
+```
+
+```js
+use proyecto_bd
+
+db.createCollection('examenprac7')
+
+db.examenprac7.insertMany([
+  {DNI: '12345678A', nombre: 'Juan', apellidos: 'García', edad: 30, estado_civil: 'Casado', hijos: 2},
+  {DNI: '87654321B', nombre: 'María', apellidos: 'García', edad: 28, estado_civil: 'Casada', hijos: 1},
+  {DNI: '13579246C', nombre: 'Luis', apellidos: 'García', edad: 56, estado_civil: 'Soltero', hijos: 0}
+])
+```
+
+![EX1](img/EX1.png)
+
+Hecho esto, edito el fichero de configuración de MongoDB para activar la auditoría de eliminaciones sobre dicha colección:
+
+```bash
+sudo nano -cl /etc/mongod.conf
+```
+
+```conf
+auditLog:
+   destination: file
+   format: JSON
+   path: /var/log/mongodb/auditLogExamen.json
+   filter: '{ atype: "authCheck", "param.ns": "proyecto_bd.examenprac7", "param.command": { $in: [ "delete" ] } }'
+
+setParameter: { auditAuthorizationSuccess: true }
+```
+
+![EX2](img/EX2.png)
+
+Reinicio el servicio, elimino un par de documentos de la colección y agrego otros dos nuevos:
+
+```bash
+sudo systemctl restart mongod
+
+mongosh -u juanje -p juanje --authenticationDatabase proyecto_bd
+```
+
+```js
+use proyecto_bd
+
+db.examenprac7.deleteOne({DNI: '12345678A'})
+
+db.examenprac7.deleteOne({DNI: '87654321B'})
+
+db.examenprac7.insertMany([
+  {DNI: '87654321Z', nombre: 'Luisa', apellidos: 'Pérez', edad: 84, estado_civil: 'Casada', hijos: 1},
+  {DNI: '64538454F', nombre: 'Paco', apellidos: 'Martín', edad: 23, estado_civil: 'Soltero', hijos: 0}
+])
+
+db.examenprac7.find()
+```
+
+![EX3](img/EX3.png)
+
+Si ahora consulto el contenido el fichero de auditoría *auditLogExamen.json*, veré que únicamente se han registrado únicamente las operaciones de eliminación que he realizado sobre la colección *examenprac7*:
+
+```bash
+sudo cat /var/log/mongodb/auditLogExamen.json | jq | grep examenprac7
+
+sudo cat /var/log/mongodb/auditLogExamen.json | jq
+```
+
+![EX4](img/EX4.png)
